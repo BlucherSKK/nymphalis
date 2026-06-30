@@ -8,17 +8,20 @@ jobs:
   meta:
     runs-on: ubuntu-latest
     outputs:
-      tag:          ${{ steps.cb.outputs.tag }}
-      make_release: ${{ steps.cb.outputs.make_release }}
+      tag:            ${{ steps.cb.outputs.tag }}
+      is_release:     ${{ steps.cb.outputs.is_release }}
+      release_stable: ${{ steps.cb.outputs.release_stable }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - id: cb
         uses: BlucherSKK/commit-builder@main
+        continue-on-error: true
+        with:
+          separator: '###'
 
   build:
-    needs: meta
     strategy:
       matrix:
         include:
@@ -66,23 +69,24 @@ jobs:
           git push origin ${{ needs.meta.outputs.tag }}
 
       - name: Download artifacts
-        if: needs.meta.outputs.make_release == 'true'
+        if: needs.meta.outputs.is_release == 'true'
         uses: actions/download-artifact@v4
         with:
           path: dist
 
       - name: Prepare binaries
-        if: needs.meta.outputs.make_release == 'true'
+        if: needs.meta.outputs.is_release == 'true'
         run: |
-          mv dist/nymphalis-linux-amd64/nymphalis  dist/nymphalis-linux-amd64
+          mv dist/nymphalis-linux-amd64/nymphalis      dist/nymphalis-linux-amd64
           mv dist/nymphalis-linux-amd64-musl/nymphalis dist/nymphalis-linux-amd64-musl
-          mv dist/nymphalis-macos-arm64/nymphalis dist/nymphalis-macos-arm64
+          mv dist/nymphalis-macos-arm64/nymphalis      dist/nymphalis-macos-arm64
 
       - name: Create release
-        if: needs.meta.outputs.make_release == 'true'
+        if: needs.meta.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
+          prerelease: ${{ needs.meta.outputs.release_stable != 'true' }}
           files: |
             dist/nymphalis-linux-amd64
             dist/nymphalis-linux-amd64-musl
