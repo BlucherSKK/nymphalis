@@ -22,6 +22,8 @@ jobs:
           separator: '###'
 
   build:
+    needs: [meta]
+    if: needs.meta.outputs.tag != ''
     strategy:
       matrix:
         include:
