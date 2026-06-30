@@ -77,9 +77,10 @@ jobs:
       - name: Prepare binaries
         if: needs.meta.outputs.is_release == 'true'
         run: |
-          mv dist/nymphalis-linux-amd64/nymphalis      dist/nymphalis-linux-amd64
-          mv dist/nymphalis-linux-amd64-musl/nymphalis dist/nymphalis-linux-amd64-musl
-          mv dist/nymphalis-macos-arm64/nymphalis      dist/nymphalis-macos-arm64
+          mkdir out
+          mv dist/nymphalis-linux-amd64/nymphalis      out/nymphalis-linux-amd64
+          mv dist/nymphalis-linux-amd64-musl/nymphalis out/nymphalis-linux-amd64-musl
+          mv dist/nymphalis-macos-arm64/nymphalis      out/nymphalis-macos-arm64
 
       - name: Create release
         if: needs.meta.outputs.is_release == 'true'
@@ -88,6 +89,6 @@ jobs:
           tag_name: ${{ needs.meta.outputs.tag }}
           prerelease: ${{ needs.meta.outputs.release_stable != 'true' }}
           files: |
-            dist/nymphalis-linux-amd64
-            dist/nymphalis-linux-amd64-musl
-            dist/nymphalis-macos-arm64
+            out/nymphalis-linux-amd64
+            out/nymphalis-linux-amd64-musl
+            out/nymphalis-macos-arm64
