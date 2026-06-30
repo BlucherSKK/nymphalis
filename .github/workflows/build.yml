@@ -1,0 +1,89 @@
+name: Build
+
+on:
+  push:
+    branches: ['main']
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag:          ${{ steps.cb.outputs.tag }}
+      make_release: ${{ steps.cb.outputs.make_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: cb
+        uses: BlucherSKK/commit-builder@main
+
+  build:
+    needs: meta
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: nymphalis-linux-amd64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: nymphalis-linux-amd64-musl
+            apt: musl-tools
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: nymphalis-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install musl tools
+        if: matrix.apt != ''
+        run: sudo apt-get install -y ${{ matrix.apt }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/${{ matrix.target }}/release/nymphalis
+
+  publish:
+    needs: [meta, build]
+    if: needs.meta.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ needs.meta.outputs.tag }}
+          git push origin ${{ needs.meta.outputs.tag }}
+
+      - name: Download artifacts
+        if: needs.meta.outputs.make_release == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Prepare binaries
+        if: needs.meta.outputs.make_release == 'true'
+        run: |
+          mv dist/nymphalis-linux-amd64/nymphalis  dist/nymphalis-linux-amd64
+          mv dist/nymphalis-linux-amd64-musl/nymphalis dist/nymphalis-linux-amd64-musl
+          mv dist/nymphalis-macos-arm64/nymphalis dist/nymphalis-macos-arm64
+
+      - name: Create release
+        if: needs.meta.outputs.make_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          files: |
+            dist/nymphalis-linux-amd64
+            dist/nymphalis-linux-amd64-musl
+            dist/nymphalis-macos-arm64
