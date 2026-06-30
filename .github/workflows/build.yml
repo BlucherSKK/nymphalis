@@ -87,10 +87,12 @@ jobs:
           mv dist/nymphalis-linux-amd64-musl/nymphalis out/nymphalis-linux-amd64-musl
           mv dist/nymphalis-macos-arm64/nymphalis      out/nymphalis-macos-arm64
 
-      - name: Read release title
+      - name: Read release notes
         if: needs.meta.outputs.is_release == 'true'
         id: notes
-        run: echo "title=$(head -1 RELEASE.md | sed 's/^#* *//')" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "title=$(head -1 RELEASE.md | sed 's/^#* *//')" >> "$GITHUB_OUTPUT"
+          tail -n +2 RELEASE.md > release_body.md
 
       - name: Create release
         if: needs.meta.outputs.is_release == 'true'
@@ -98,7 +100,7 @@ jobs:
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
           name: ${{ steps.notes.outputs.title }}
-          body_path: RELEASE.md
+          body_path: release_body.md
           prerelease: ${{ needs.meta.outputs.release_stable != 'true' }}
           files: |
             out/nymphalis-linux-amd64
