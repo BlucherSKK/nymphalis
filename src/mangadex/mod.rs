@@ -154,12 +154,20 @@ fn run_download(rest: &[String]) {
     }
 }
 
+fn cover_url(json: &Value, manga_id: &str) -> Option<String> {
+    let rels = json["data"]["relationships"].as_array()?;
+    let cover = rels.iter().find(|r| r["type"] == "cover_art")?;
+    let filename = cover["attributes"]["fileName"].as_str()?;
+    Some(format!("https://uploads.mangadex.org/covers/{}/{}", manga_id, filename))
+}
+
 fn download_manga(client: &reqwest::blocking::Client, base_dir: &str, manga_id: &str) {
-    let info_url = format!("{}/manga/{}", API, manga_id);
-    let title = match api_get(client, &info_url) {
-        Ok(j) => best_title(&j["data"]["attributes"]),
+    let info_url = format!("{}/manga/{}?includes[]=cover_art", API, manga_id);
+    let info_json = match api_get(client, &info_url) {
+        Ok(j) => j,
         Err(e) => { eprintln!("{}", trf("Failed to fetch manga '{}': {}", &[&manga_id, &e])); return; }
     };
+    let title = best_title(&info_json["data"]["attributes"]);
 
     let agg_url = format!("{}/manga/{}/aggregate?translatedLanguage[]=ru", API, manga_id);
     let agg = match api_get(client, &agg_url) {
@@ -177,6 +185,15 @@ fn download_manga(client: &reqwest::blocking::Client, base_dir: &str, manga_id: 
     if let Err(e) = fs::create_dir_all(&root_dir) {
         eprintln!("{}", trf("Cannot create {}: {}", &[&root_dir.display(), &e]));
         return;
+    }
+
+    // обложка
+    if let Some(url) = cover_url(&info_json, manga_id) {
+        let ext = url.rsplit('.').next().unwrap_or("jpg");
+        let dest = root_dir.join(format!("cover.{}", ext));
+        if !dest.exists() {
+            let _ = download_file_simple(client, &url, &dest, REFERER);
+        }
     }
 
     println!("{}", trf("Downloading '{}': {} chapter(s)", &[&title, &chapters.len()]));

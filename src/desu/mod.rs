@@ -821,6 +821,13 @@ fn download_manga(client: &reqwest::blocking::Client, base_dir: &str, input: &st
         return;
     }
 
+    // обложка
+    let cover_url = format!("https://static.desu.uno/data/manga/covers/preview/{}.jpg", id);
+    let cover_path = root_dir.join("cover.jpg");
+    if !cover_path.exists() {
+        let _ = download_file_simple(client, &cover_url, &cover_path, REFERER);
+    }
+
     let display = crate::cli::DownloadDisplay::new(
         chapters.len() as u64,
         manga_name.chars().take(22).collect::<String>(),
