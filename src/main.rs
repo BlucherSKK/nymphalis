@@ -6,6 +6,7 @@ mod http;
 mod language;
 mod mangadex;
 mod patreon;
+mod shell;
 
 use language::{tr, trf};
 use std::env;
@@ -123,6 +124,10 @@ fn main() {
     match args[1].as_str() {
         "set" => {
             config::run_set(&args[2..]);
+            return;
+        }
+        "add-shell-completions" => {
+            shell::install();
             return;
         }
         "-h" | "--help" => {
