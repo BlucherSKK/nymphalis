@@ -63,10 +63,15 @@ jobs:
 
       - name: Create tag
         run: |
+          TAG="${{ needs.meta.outputs.tag }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ needs.meta.outputs.tag }}
-          git push origin ${{ needs.meta.outputs.tag }}
+          if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            git tag "$TAG"
+            git push origin "$TAG"
+          else
+            echo "Tag $TAG already exists, skipping"
+          fi
 
       - name: Download artifacts
         if: needs.meta.outputs.is_release == 'true'
@@ -82,11 +87,18 @@ jobs:
           mv dist/nymphalis-linux-amd64-musl/nymphalis out/nymphalis-linux-amd64-musl
           mv dist/nymphalis-macos-arm64/nymphalis      out/nymphalis-macos-arm64
 
+      - name: Read release title
+        if: needs.meta.outputs.is_release == 'true'
+        id: notes
+        run: echo "title=$(head -1 RELEASE.md | sed 's/^#* *//')" >> "$GITHUB_OUTPUT"
+
       - name: Create release
         if: needs.meta.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
+          name: ${{ steps.notes.outputs.title }}
+          body_path: RELEASE.md
           prerelease: ${{ needs.meta.outputs.release_stable != 'true' }}
           files: |
             out/nymphalis-linux-amd64
