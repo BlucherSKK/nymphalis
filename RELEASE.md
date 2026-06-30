@@ -39,4 +39,16 @@ chmod +x nymphalis-linux-amd64
 sudo mv nymphalis-linux-amd64 /usr/local/bin/nymphalis
 ```
 
+пока что только для arch linux
+
+```sh
+paru -Sy nymphalis-bin
+```
+
+или
+
+```sh
+yay -Sy nymphalis-bin
+```
+
 Для статически слинкованной версии без зависимости от системного glibc используй `nymphalis-linux-amd64-musl`.
