@@ -7,6 +7,8 @@ pub enum ProgressUnit {
     Bytes,
     // дискретные штуки с известным итогом (страницы, треки…)
     Pages(u64),
+    // чанки видео (HLS и подобное)
+    Chunks(u64),
 }
 
 // одна строка в дисплее загрузки — файл, глава, что угодно
@@ -21,6 +23,9 @@ impl ContentUnit {
     }
     pub fn pages(label: impl Into<String>, total: u64) -> Self {
         Self { label: label.into(), unit: ProgressUnit::Pages(total) }
+    }
+    pub fn chunks(label: impl Into<String>, total: u64) -> Self {
+        Self { label: label.into(), unit: ProgressUnit::Chunks(total) }
     }
 }
 
@@ -83,6 +88,16 @@ impl DownloadDisplay {
                     .progress_chars("#>-"),
                 );
             }
+            ProgressUnit::Chunks(total) => {
+                bar.set_length(*total);
+                bar.set_style(
+                    ProgressStyle::with_template(
+                        "  {msg:<32} [{bar:26.cyan/black}] {pos}/{len} фрагм.",
+                    )
+                    .unwrap()
+                    .progress_chars("=>-"),
+                );
+            }
         }
 
         bar.set_message(unit.label.chars().take(30).collect::<String>());
@@ -95,6 +110,7 @@ impl DownloadDisplay {
         let detail = match handle.unit {
             ProgressUnit::Bytes   => format!("{}", HumanBytes(amount)),
             ProgressUnit::Pages(n) => format!("{} стр.", n),
+            ProgressUnit::Chunks(n) => format!("{} фрагм.", n),
         };
         handle.bar.finish_and_clear();
         let label = handle.label.chars().take(36).collect::<String>();

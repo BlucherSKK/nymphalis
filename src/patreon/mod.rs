@@ -578,7 +578,7 @@ fn scan_posts(
             "{}/posts\
              ?filter[campaign_id]={}\
              &filter[is_draft]=false\
-             &include=images,attachments,audio\
+             &include=images,attachments,audio,media\
              &fields[post]=title\
              &fields[media]=file_name,image_urls,download_url\
              &fields[attachment]=name,url\
@@ -636,9 +636,9 @@ fn collect_post_items(
                 && v["id"].as_str() == Some(id)
         }) {
             let name = m["attributes"]["file_name"].as_str().unwrap_or("file");
-            let url = m["attributes"]["image_urls"]["original"]
+            let url = m["attributes"]["download_url"]
                 .as_str()
-                .or_else(|| m["attributes"]["download_url"].as_str())
+                .or_else(|| m["attributes"]["image_urls"]["original"].as_str())
                 .or_else(|| m["attributes"]["image_urls"]["default"].as_str())
                 .unwrap_or("");
             push_item(name, url, dir, to_download, already_have, seen);
@@ -680,6 +680,12 @@ fn push_item(
     if url.is_empty() { return; }
     let safe = sanitize_filename(filename);
     if safe.is_empty() || !seen.insert(safe.clone()) { return; }
+
+    let dest = dir.join(&safe);
+    if dest.exists() {
+        *already_have += 1;
+        return;
+    }
 
     to_download.push((safe, url.to_string()));
 }

@@ -22,7 +22,13 @@ chmod +x nymphalis-linux-amd64
 sudo mv nymphalis-linux-amd64 /usr/local/bin/nymphalis
 ```
 
-Available builds: `linux-amd64` (glibc), `linux-amd64-musl` (static), `macos-arm64`.
+Available builds: `linux-amd64` (glibc), `linux-amd64-musl` (static), `macos-arm64`, `windows-amd64`.
+
+### Windows (PowerShell)
+
+```pwsh
+$d="$env:LOCALAPPDATA\nymphalis"; md $d -ea 0; iwr https://github.com/BlucherSKK/nymphalis/releases/latest/download/nymphalis-windows-amd64.exe -O $d\nymphalis.exe; [Environment]::SetEnvironmentVariable('PATH', "$env:PATH;$d", 'User')
+```
 
 ---
 
@@ -155,7 +161,13 @@ chmod +x nymphalis-linux-amd64
 sudo mv nymphalis-linux-amd64 /usr/local/bin/nymphalis
 ```
 
-Доступные сборки: `linux-amd64` (glibc), `linux-amd64-musl` (статическая), `macos-arm64`.
+Доступные сборки: `linux-amd64` (glibc), `linux-amd64-musl` (статическая), `macos-arm64`, `windows-amd64`.
+
+### Windows (PowerShell)
+
+```pwsh
+$d="$env:LOCALAPPDATA\nymphalis"; md $d -ea 0; iwr https://github.com/BlucherSKK/nymphalis/releases/latest/download/nymphalis-windows-amd64.exe -O $d\nymphalis.exe; [Environment]::SetEnvironmentVariable('PATH', "$env:PATH;$d", 'User')
+```
 
 ---
 

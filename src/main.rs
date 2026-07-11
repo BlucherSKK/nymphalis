@@ -7,6 +7,7 @@ mod language;
 mod mangadex;
 mod patreon;
 mod shell;
+mod kodik;
 
 use language::{tr, trf};
 use std::env;
@@ -22,6 +23,7 @@ const SERVICES: &[ServiceDef] = &[
     ServiceDef { name: "desu.uno",      aliases: &["desu"] },
     ServiceDef { name: "mangadex.org",  aliases: &["mangadex", "md", "mdex"] },
     ServiceDef { name: "patreon.com",   aliases: &["patreon"] },
+    ServiceDef { name: "kodikplayer.com", aliases: &["kodik"] },
 ];
 
 /// Returns the canonical service name for the given user input (full name or alias).
@@ -108,6 +110,9 @@ fn print_usage() {
     eprintln!("  nymphalis patreon login");
     eprintln!("  nymphalis patreon show");
     eprintln!("  nymphalis patreon download ./dir creator1 creator2");
+    eprintln!();
+    eprintln!("Commands (kodikplayer.com):");
+    eprintln!("  nymphalis kodik download <dir> <url1> [url2] ...");
 }
 
 fn main() {
@@ -160,6 +165,7 @@ fn main() {
         "desu.uno"     => desu::dispatch(&args[2..]),
         "mangadex.org" => mangadex::dispatch(&args[2..]),
         "patreon.com"  => patreon::dispatch(&args[2..]),
+        "kodikplayer.com" => kodik::dispatch(&args[2..]),
         _ => unreachable!(),
     }
 }

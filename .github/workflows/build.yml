@@ -30,13 +30,20 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: nymphalis-linux-amd64
+            bin: nymphalis
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: nymphalis-linux-amd64-musl
             apt: musl-tools
+            bin: nymphalis
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: nymphalis-macos-arm64
+            bin: nymphalis
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: nymphalis-windows-amd64.exe
+            bin: nymphalis.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +57,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release/nymphalis
+          path: target/${{ matrix.target }}/release/${{ matrix.bin }}
 
   publish:
     needs: [meta, build]
@@ -85,9 +92,10 @@ jobs:
         if: needs.meta.outputs.is_release == 'true'
         run: |
           mkdir out
-          mv dist/nymphalis-linux-amd64/nymphalis      out/nymphalis-linux-amd64
-          mv dist/nymphalis-linux-amd64-musl/nymphalis out/nymphalis-linux-amd64-musl
-          mv dist/nymphalis-macos-arm64/nymphalis      out/nymphalis-macos-arm64
+          mv dist/nymphalis-linux-amd64/nymphalis           out/nymphalis-linux-amd64
+          mv dist/nymphalis-linux-amd64-musl/nymphalis      out/nymphalis-linux-amd64-musl
+          mv dist/nymphalis-macos-arm64/nymphalis           out/nymphalis-macos-arm64
+          mv dist/nymphalis-windows-amd64.exe/nymphalis.exe out/nymphalis-windows-amd64.exe
 
       - name: Read release notes
         if: needs.meta.outputs.is_release == 'true'
@@ -108,3 +116,4 @@ jobs:
             out/nymphalis-linux-amd64
             out/nymphalis-linux-amd64-musl
             out/nymphalis-macos-arm64
+            out/nymphalis-windows-amd64.exe
