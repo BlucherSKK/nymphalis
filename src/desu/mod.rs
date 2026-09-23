@@ -1,3 +1,5 @@
+mod epub;
+
 use crate::config::{load_config, save_config};
 use crate::gelbooru::download_file_simple;
 use crate::language::{tr, trf};
@@ -5,7 +7,7 @@ use regex::Regex;
 use serde::Deserialize;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::exit;
 
 const BASE: &str = "https://desu.uno";
@@ -43,34 +45,10 @@ pub fn dispatch(rest: &[String]) {
     }
 }
 
-// логин
-
-enum BrowserKind {
-    Firefox,
-    Chromium(&'static str),
-    Falkon,
-}
-
-struct Browser {
-    bin:  &'static str,
-    kind: BrowserKind,
-}
-
-fn resolve_browser(name: &str) -> Option<Browser> {
-    match name.to_lowercase().as_str() {
-        "firefox" | "ff" =>
-            Some(Browser { bin: "firefox",       kind: BrowserKind::Firefox }),
-        "chromium" =>
-            Some(Browser { bin: "chromium",       kind: BrowserKind::Chromium("chromium") }),
-        "chrome" | "google-chrome" =>
-            Some(Browser { bin: "google-chrome",  kind: BrowserKind::Chromium("google-chrome") }),
-        "brave" | "brave-browser" =>
-            Some(Browser { bin: "brave-browser",  kind: BrowserKind::Chromium("brave-browser") }),
-        "falkon" =>
-            Some(Browser { bin: "falkon",         kind: BrowserKind::Falkon }),
-        _ => None,
-    }
-}
+use crate::browser::{
+    chromium_cookie_paths, falkon_cookie_paths, firefox_cookie_paths, open_browser,
+    resolve_browser, sqlite3_query, Browser, BrowserKind,
+};
 
 fn run_login(rest: &[String]) {
     let browser: Option<Browser> = match rest.first() {
@@ -90,7 +68,7 @@ fn run_login(rest: &[String]) {
     println!();
     println!("{}", tr("Log in with your account, then press Enter here."));
 
-    open_browser(LOGIN_URL, browser.as_ref().map(|b| b.bin));
+    open_browser(LOGIN_URL, browser.as_ref());
 
     let _ = io::stdin().read_line(&mut String::new());
 
@@ -211,98 +189,46 @@ fn extract_xenforo_username(html: &str) -> Option<String> {
     None
 }
 
-fn open_browser(url: &str, bin: Option<&str>) {
-    let cmd = bin.unwrap_or("xdg-open");
-    let launched = std::process::Command::new(cmd)
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .is_ok();
-    if !launched {
-        println!("{}", trf("Could not launch '{}' automatically.", &[&cmd]));
-        println!("{}", trf("Please open this URL manually: {}", &[&url]));
-    }
-}
-
-
 fn read_firefox_desu_session() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let ff_dir = PathBuf::from(&home).join(".mozilla").join("firefox");
-    for entry in fs::read_dir(&ff_dir).ok()?.flatten() {
-        let db = entry.path().join("cookies.sqlite");
-        if !db.exists() { continue; }
-        let sql = "SELECT GROUP_CONCAT(name || '=' || value, '; ') \
-                   FROM (SELECT name, value FROM moz_cookies \
-                         WHERE (host = 'desu.uno' OR host = '.desu.uno') \
-                         AND name LIKE 'xf_%' AND length(value) > 0 \
-                         GROUP BY name ORDER BY lastAccessed DESC)";
-        if let Some(v) = sqlite3_query(&db, sql) { return Some(v); }
+    let sql = "SELECT GROUP_CONCAT(name || '=' || value, '; ') \
+               FROM (SELECT name, value FROM moz_cookies \
+                     WHERE (host = 'desu.uno' OR host = '.desu.uno') \
+                     AND name LIKE 'xf_%' AND length(value) > 0 \
+                     GROUP BY name ORDER BY lastAccessed DESC)";
+    for db in firefox_cookie_paths() {
+        if let Some(v) = sqlite3_query(&db, sql, "booru_desu_cookie") {
+            return Some(v);
+        }
     }
     None
 }
 
 fn read_chromium_desu_session(browser: &str) -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let db = PathBuf::from(&home)
-        .join(".config")
-        .join(browser)
-        .join("Default")
-        .join("Cookies");
-    if !db.exists() { return None; }
     let sql = "SELECT GROUP_CONCAT(name || '=' || value, '; ') \
                FROM (SELECT name, value FROM cookies \
                      WHERE (host_key = 'desu.uno' OR host_key = '.desu.uno') \
                      AND name LIKE 'xf_%' AND length(value) > 0 \
                      GROUP BY name ORDER BY last_access_utc DESC)";
-    sqlite3_query(&db, sql)
-}
-
-fn read_falkon_desu_session() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let profiles_dir = PathBuf::from(&home)
-        .join(".config")
-        .join("falkon")
-        .join("profiles");
-    for entry in fs::read_dir(&profiles_dir).ok()?.flatten() {
-        let db = entry.path().join("Cookies");
-        if !db.exists() { continue; }
-        let sql = "SELECT GROUP_CONCAT(name || '=' || value, '; ') \
-                   FROM (SELECT name, value FROM cookies \
-                         WHERE (host_key = 'desu.uno' OR host_key = '.desu.uno') \
-                         AND name LIKE 'xf_%' AND length(value) > 0 \
-                         GROUP BY name ORDER BY last_access_utc DESC)";
-        if let Some(v) = sqlite3_query(&db, sql) { return Some(v); }
+    for db in chromium_cookie_paths(browser) {
+        if let Some(v) = sqlite3_query(&db, sql, "booru_desu_cookie") {
+            return Some(v);
+        }
     }
     None
 }
 
-fn sqlite3_query(db: &Path, sql: &str) -> Option<String> {
-    let tmp     = std::env::temp_dir().join("booru_desu_cookie.sqlite");
-    let tmp_wal = std::env::temp_dir().join("booru_desu_cookie.sqlite-wal");
-    let tmp_shm = std::env::temp_dir().join("booru_desu_cookie.sqlite-shm");
-
-    fs::copy(db, &tmp).ok()?;
-    let wal = PathBuf::from(format!("{}-wal", db.display()));
-    let shm = PathBuf::from(format!("{}-shm", db.display()));
-    if wal.exists() { let _ = fs::copy(&wal, &tmp_wal); }
-    if shm.exists() { let _ = fs::copy(&shm, &tmp_shm); }
-
-    let out = std::process::Command::new("sqlite3")
-        .arg(&tmp)
-        .arg(sql)
-        .output()
-        .ok();
-
-    let _ = fs::remove_file(&tmp);
-    let _ = fs::remove_file(&tmp_wal);
-    let _ = fs::remove_file(&tmp_shm);
-
-    let out = out?;
-    if !out.status.success() { return None; }
-    let v = String::from_utf8(out.stdout).ok()?;
-    let v = v.trim().to_string();
-    if v.is_empty() { None } else { Some(v) }
+fn read_falkon_desu_session() -> Option<String> {
+    let sql = "SELECT GROUP_CONCAT(name || '=' || value, '; ') \
+               FROM (SELECT name, value FROM cookies \
+                     WHERE (host_key = 'desu.uno' OR host_key = '.desu.uno') \
+                     AND name LIKE 'xf_%' AND length(value) > 0 \
+                     GROUP BY name ORDER BY last_access_utc DESC)";
+    for db in falkon_cookie_paths() {
+        if let Some(v) = sqlite3_query(&db, sql, "booru_desu_cookie") {
+            return Some(v);
+        }
+    }
+    None
 }
 
 fn save_session(value: String) {
@@ -318,11 +244,11 @@ fn print_service_usage() {
     eprintln!("{}", tr("Commands (desu.uno):"));
     eprintln!(
         "{}",
-        tr("  nymphalis desu.uno download <dir> <slug.id> [slug.id2] ...")
+        tr("  nymphalis desu.uno download [manga|ranobe] <dir> <slug.id> [slug.id2] ...")
     );
     eprintln!(
         "{}",
-        tr("      Download all chapters of the given manga title(s) into <dir>.")
+        tr("      Download all chapters of the given title(s) into <dir> (default: manga).")
     );
     eprintln!();
     eprintln!("{}", tr("  nymphalis desu.uno search <keyword>"));
@@ -480,7 +406,7 @@ struct ChapterApiPage {
     url: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct ApiErrorItem {
     message: Option<String>,
 }
@@ -519,6 +445,138 @@ fn fetch_chapter_pages_api(
     }
 
     Err(tr("No pages found in chapter API response."))
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct RanobeChaptersResponse {
+    chapters: Option<Vec<RanobeChapterItem>>,
+    errors: Option<Vec<ApiErrorItem>>,
+    error: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct RanobeChapterItem {
+    id: u64,
+    #[serde(default)]
+    volume: serde_json::Value,
+    #[serde(default)]
+    number: serde_json::Value,
+    title: Option<String>,
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    chapter_type: Option<String>,
+    view_url: Option<String>,
+}
+
+impl RanobeChapterItem {
+    fn volume_str(&self) -> String {
+        match &self.volume {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    fn number_str(&self) -> String {
+        match &self.number {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RanobeChapterDetailResponse {
+    chapter: Option<RanobeChapterDetail>,
+    errors: Option<Vec<ApiErrorItem>>,
+    error: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RanobeChapterDetail {
+    #[allow(dead_code)]
+    id: u64,
+    #[serde(default)]
+    #[allow(dead_code)]
+    volume: serde_json::Value,
+    #[serde(default)]
+    #[allow(dead_code)]
+    number: serde_json::Value,
+    title: Option<String>,
+    content: Option<Vec<RanobeChapterContentItem>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RanobeChapterContentItem {
+    #[serde(rename = "type")]
+    item_type: String,
+    html: Option<String>,
+    url: Option<String>,
+    #[allow(dead_code)]
+    media_type: Option<String>,
+    position: Option<u32>,
+}
+
+fn fetch_ranobe_chapters_api(
+    client: &reqwest::blocking::Client,
+    ranobe_id: u64,
+) -> Result<Vec<RanobeChapterItem>, String> {
+    let url = format!("{}/api/ranobe/{}/chapters", BASE, ranobe_id);
+    let body = plain_get(client, &url)?;
+    let resp: RanobeChaptersResponse = serde_json::from_str(&body)
+        .map_err(|e| trf("Failed to parse ranobe chapters JSON: {}", &[&e]))?;
+
+    if let Some(chapters) = resp.chapters {
+        return Ok(chapters);
+    }
+
+    if let Some(errors) = resp.errors {
+        for err in errors {
+            if let Some(msg) = err.message {
+                return Err(msg);
+            }
+        }
+    }
+
+    if let Some(errors) = resp.error {
+        if let Some(msg) = errors.into_iter().next() {
+            return Err(msg);
+        }
+    }
+
+    Err(tr("No chapters found in ranobe chapters API response."))
+}
+
+fn fetch_ranobe_chapter_detail_api(
+    client: &reqwest::blocking::Client,
+    ranobe_id: u64,
+    chapter_id: u64,
+) -> Result<RanobeChapterDetail, String> {
+    let url = format!("{}/api/ranobe/{}/chapters/{}", BASE, ranobe_id, chapter_id);
+    let body = plain_get(client, &url)?;
+    let resp: RanobeChapterDetailResponse = serde_json::from_str(&body)
+        .map_err(|e| trf("Failed to parse ranobe chapter content JSON: {}", &[&e]))?;
+
+    if let Some(chapter) = resp.chapter {
+        return Ok(chapter);
+    }
+
+    if let Some(errors) = resp.errors {
+        for err in errors {
+            if let Some(msg) = err.message {
+                return Err(msg);
+            }
+        }
+    }
+
+    if let Some(errors) = resp.error {
+        if let Some(msg) = errors.into_iter().next() {
+            return Err(msg);
+        }
+    }
+
+    Err(tr("No chapter data in ranobe chapter content response."))
 }
 
 fn parse_chapter_id_from_reader_html(html: &str) -> Option<u64> {
@@ -906,17 +964,31 @@ fn extract_div_class(block: &str, class: &str) -> String {
     inner[..inner_end].trim().to_string()
 }
 
-// скачивание
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadKind {
+    Manga,
+    Ranobe,
+}
 
 fn run_download(rest: &[String]) {
-    if rest.len() < 2 {
-        eprintln!("{}", tr("download requires at least one manga title.\n"));
+    let (kind, rest_args) = match rest.first().map(|s| s.as_str()) {
+        Some("ranobe") => (DownloadKind::Ranobe, &rest[1..]),
+        Some("manga") => (DownloadKind::Manga, &rest[1..]),
+        _ => (DownloadKind::Manga, rest),
+    };
+
+    if rest_args.len() < 2 {
+        let msg = match kind {
+            DownloadKind::Ranobe => tr("download ranobe requires an output directory and at least one title.\n"),
+            DownloadKind::Manga => tr("download requires at least one manga title.\n"),
+        };
+        eprintln!("{}", msg);
         print_service_usage();
         exit(1);
     }
 
-    let out_dir = &rest[0];
-    let titles = &rest[1..];
+    let out_dir = &rest_args[0];
+    let titles = &rest_args[1..];
 
     if let Err(e) = fs::create_dir_all(out_dir) {
         eprintln!(
@@ -929,7 +1001,10 @@ fn run_download(rest: &[String]) {
     let client = build_client();
 
     for title in titles {
-        download_manga(&client, out_dir, title);
+        match kind {
+            DownloadKind::Manga => download_manga(&client, out_dir, title),
+            DownloadKind::Ranobe => download_ranobe(&client, out_dir, title),
+        }
     }
 }
 
@@ -1172,3 +1247,326 @@ fn confirm_chapters(count: usize) -> bool {
     let input = input.trim().to_lowercase();
     input.starts_with('y') || input.starts_with('д')
 }
+
+fn download_ranobe(client: &reqwest::blocking::Client, base_dir: &str, input: &str) {
+    let (slug, id) = match parse_slug_id(input) {
+        Some(v) => v,
+        None => {
+            eprintln!(
+                "{}",
+                trf(
+                    "Invalid ranobe id format: '{}'. Expected numeric id or 'slug.id'.",
+                    &[&input]
+                )
+            );
+            return;
+        }
+    };
+
+    let mut chapters = match fetch_ranobe_chapters_api(client, id) {
+        Ok(chs) => chs,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                trf("Failed to fetch ranobe chapters for id {}: {}", &[&id, &e])
+            );
+            return;
+        }
+    };
+
+    if chapters.is_empty() {
+        println!("{}", trf("No chapters found for ranobe id {}.", &[&id]));
+        return;
+    }
+
+    let actual_slug = chapters
+        .first()
+        .and_then(|c| c.view_url.as_deref())
+        .and_then(parse_slug_from_view_url)
+        .unwrap_or_else(|| {
+            if slug != id.to_string() {
+                format!("{}.{}", slug, id)
+            } else {
+                id.to_string()
+            }
+        });
+
+    let ranobe_url = format!("{}/ranobe/{}/", BASE, actual_slug);
+    let ranobe_name = match plain_get_with_url(client, &ranobe_url) {
+        Ok((html, _)) => parse_h1(&html).unwrap_or_else(|| actual_slug.clone()),
+        Err(_) => actual_slug.clone(),
+    };
+
+    chapters.sort_by(|a, b| {
+        ranobe_sort_key(&a.volume_str(), &a.number_str())
+            .cmp(&ranobe_sort_key(&b.volume_str(), &b.number_str()))
+    });
+
+    println!(
+        "{}",
+        trf(
+            "Downloading ranobe '{}': {} chapter(s)",
+            &[&ranobe_name, &chapters.len()]
+        )
+    );
+
+    let root_dir = PathBuf::from(base_dir);
+    if let Err(e) = fs::create_dir_all(&root_dir) {
+        eprintln!(
+            "{}",
+            trf(
+                "Failed to create directory '{}': {}",
+                &[&root_dir.display(), &e]
+            )
+        );
+        return;
+    }
+
+    if !confirm_chapters(chapters.len()) {
+        println!("{}", tr("Cancelled."));
+        return;
+    }
+
+    let cover_url = format!("https://static.desu.uno/data/ranobe/covers/preview/{}.jpg", id);
+    let cover_path = root_dir.join("cover.jpg");
+    if !cover_path.exists() {
+        let _ = download_file_simple(client, &cover_url, &cover_path, REFERER);
+    }
+
+    let display = crate::cli::DownloadDisplay::new(
+        chapters.len() as u64,
+        ranobe_name.chars().take(22).collect::<String>(),
+    );
+
+    let total = chapters.len();
+    let mut downloaded = 0usize;
+
+    for (idx, chapter) in chapters.iter().enumerate() {
+        display.set_msg(trf("Chapter {}/{}", &[&(idx + 1), &total]));
+
+        let vol_str = chapter.volume_str();
+        let num_str = chapter.number_str();
+        let vol = if vol_str.is_empty() { "0" } else { &vol_str };
+        let num = if num_str.is_empty() { "0" } else { &num_str };
+        let file_stem = format!("vol{}_ch{}", vol, num);
+
+        let epub_path = root_dir.join(format!("{}.epub", file_stem));
+        let txt_path = root_dir.join(format!("{}.txt", file_stem));
+
+        if epub_path.exists()
+            && epub_path.metadata().map(|m| m.len() > 0).unwrap_or(false)
+            && txt_path.exists()
+            && txt_path.metadata().map(|m| m.len() > 0).unwrap_or(false)
+        {
+            downloaded += 1;
+            display.advance();
+            continue;
+        }
+
+        let handle = display.begin(crate::cli::ContentUnit::bytes(&file_stem));
+
+        let detail = match fetch_ranobe_chapter_detail_api(client, id, chapter.id) {
+            Ok(d) => d,
+            Err(e) => {
+                display.end_err(handle, &e);
+                display.advance();
+                continue;
+            }
+        };
+
+        let ch_title = detail
+            .title
+            .as_deref()
+            .or_else(|| chapter.title.as_deref())
+            .unwrap_or("")
+            .trim();
+
+        let display_title = if vol == "0" {
+            if ch_title.is_empty() {
+                format!("Глава {}", num)
+            } else {
+                format!("Глава {}. {}", num, ch_title)
+            }
+        } else {
+            if ch_title.is_empty() {
+                format!("Том {} Глава {}", vol, num)
+            } else {
+                format!("Том {} Глава {}. {}", vol, num, ch_title)
+            }
+        };
+
+        let mut content_html = String::new();
+        let mut plain_text_parts = Vec::new();
+        let mut images_data: Vec<(String, String, Vec<u8>)> = Vec::new();
+
+        let mut items = detail.content.unwrap_or_default();
+        items.sort_by_key(|c| c.position.unwrap_or(0));
+
+        let mut img_counter = 0usize;
+        let mut has_error = false;
+
+        for item in items {
+            match item.item_type.as_str() {
+                "text" => {
+                    if let Some(html) = item.html {
+                        let cleaned = epub::clean_xhtml(&html);
+                        content_html.push_str(&cleaned);
+                        content_html.push('\n');
+
+                        let plain = epub::html_to_plain_text(&html);
+                        if !plain.is_empty() {
+                            plain_text_parts.push(plain);
+                        }
+                    }
+                }
+                "image" => {
+                    if let Some(img_url) = item.url {
+                        if !img_url.is_empty() {
+                            img_counter += 1;
+                            let clean_url = img_url.split('?').next().unwrap_or(&img_url);
+                            let ext = clean_url
+                                .rsplit('.')
+                                .next()
+                                .filter(|e| e.len() <= 5 && !e.contains('/'))
+                                .unwrap_or("jpg");
+
+                            let img_rel_path = format!("images/img_{:03}.{}", img_counter, ext);
+                            let img_id = format!("img_{:03}", img_counter);
+
+                            match download_bytes(client, &img_url) {
+                                Ok(bytes) => {
+                                    content_html.push_str(&format!(
+                                        r#"<div class="chapter-image"><img src="{}" alt="" /></div>"#,
+                                        img_rel_path
+                                    ));
+                                    content_html.push('\n');
+                                    images_data.push((img_id, img_rel_path, bytes));
+                                }
+                                Err(e) => {
+                                    display.println(format!("  {} img_{:03}: {}", file_stem, img_counter, e));
+                                    has_error = true;
+                                }
+                            }
+                            plain_text_parts.push(format!("[Иллюстрация: img_{:03}.{}]", img_counter, ext));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let image_refs: Vec<(&str, &str, &[u8])> = images_data
+            .iter()
+            .map(|(id, path, bytes)| (id.as_str(), path.as_str(), bytes.as_slice()))
+            .collect();
+
+        let epub_bytes = epub::build_epub(
+            &display_title,
+            &format!("urn:desu:ranobe:{}:{}", id, chapter.id),
+            &content_html,
+            &image_refs,
+        );
+
+        let plain_text = format!("{}\n\n{}", display_title, plain_text_parts.join("\n\n"));
+
+        let write_ok = fs::write(&epub_path, &epub_bytes).is_ok()
+            && fs::write(&txt_path, plain_text.as_bytes()).is_ok();
+
+        let total_size = (epub_bytes.len() + plain_text.len()) as u64;
+
+        if write_ok && !has_error {
+            display.end_ok(handle, total_size);
+            downloaded += 1;
+        } else if write_ok {
+            display.end_ok(handle, total_size);
+            downloaded += 1;
+        } else {
+            display.end_err(handle, "write error");
+        }
+        display.advance();
+    }
+
+    display.finish(trf("Done. {} chapter(s) downloaded.", &[&downloaded]));
+    println!("{}", trf("Done. {} chapter(s) downloaded.", &[&downloaded]));
+}
+
+fn ranobe_sort_key(volume: &str, number: &str) -> (u32, u32) {
+    let vol = volume.parse::<u32>().unwrap_or(0);
+    let ch = (number.parse::<f64>().unwrap_or(0.0) * 10.0) as u32;
+    (vol, ch)
+}
+
+fn parse_slug_from_view_url(view_url: &str) -> Option<String> {
+    let pos = view_url.find("/ranobe/")? + "/ranobe/".len();
+    let rest = &view_url[pos..];
+    let end = rest.find('/')?;
+    Some(rest[..end].to_string())
+}
+
+fn download_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>, String> {
+    let mut req = client.get(url).header(reqwest::header::REFERER, REFERER);
+    if let Some(cookie) = session_cookie() {
+        req = req.header(reqwest::header::COOKIE, cookie);
+    }
+    let resp = req.send().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    resp.bytes().map(|b| b.to_vec()).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ranobe_sort_key() {
+        assert_eq!(ranobe_sort_key("1", "2"), (1, 20));
+        assert_eq!(ranobe_sort_key("1", "2.5"), (1, 25));
+        assert_eq!(ranobe_sort_key("2", "1"), (2, 10));
+        assert!(ranobe_sort_key("1", "10") < ranobe_sort_key("2", "1"));
+        assert!(ranobe_sort_key("1", "2") < ranobe_sort_key("1", "2.5"));
+    }
+
+    #[test]
+    fn test_parse_slug_from_view_url() {
+        let url = "https://desu.uno/ranobe/sss-class-suicide-hunter.56/vol2/ch401/rus";
+        assert_eq!(
+            parse_slug_from_view_url(url),
+            Some("sss-class-suicide-hunter.56".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_ranobe_chapters_json() {
+        let json = r#"{
+            "chapters": [
+                {
+                    "id": 100,
+                    "volume": "1",
+                    "number": "5",
+                    "title": "Test Chapter",
+                    "type": "text",
+                    "view_url": "https://desu.uno/ranobe/test.1/vol1/ch5/rus"
+                },
+                {
+                    "id": 101,
+                    "volume": 2,
+                    "number": 10,
+                    "title": null,
+                    "type": "hybrid",
+                    "view_url": "https://desu.uno/ranobe/test.1/vol2/ch10/rus"
+                }
+            ]
+        }"#;
+
+        let resp: RanobeChaptersResponse = serde_json::from_str(json).unwrap();
+        let chapters = resp.chapters.unwrap();
+        assert_eq!(chapters.len(), 2);
+        assert_eq!(chapters[0].volume_str(), "1");
+        assert_eq!(chapters[0].number_str(), "5");
+        assert_eq!(chapters[1].volume_str(), "2");
+        assert_eq!(chapters[1].number_str(), "10");
+    }
+}
+

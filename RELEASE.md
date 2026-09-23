@@ -1,8 +1,8 @@
-# add compile for macos_x86-64
+# add mac browsers and pardownload from desu
 
-## Изменения
+## Изменени
 
-- добавлена версия под macos с интелами
+ранобе с десу и браузеры маков
 
 
 ## Установка

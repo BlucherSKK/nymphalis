@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::exit;
 use std::thread::sleep;
 use std::time::Duration;
@@ -125,33 +125,10 @@ fn api_get(client: &Client, url: &str, session: &str) -> Result<Value, String> {
 // логин
 
 const LOGIN_URL: &str = "https://www.patreon.com/login";
-
-enum BrowserKind {
-    Firefox,
-    Chromium(&'static str),
-    Falkon,
-}
-
-struct Browser {
-    bin:  &'static str,
-    kind: BrowserKind,
-}
-
-fn resolve_browser(name: &str) -> Option<Browser> {
-    match name.to_lowercase().as_str() {
-        "firefox" | "ff" =>
-            Some(Browser { bin: "firefox",       kind: BrowserKind::Firefox }),
-        "chromium" =>
-            Some(Browser { bin: "chromium",       kind: BrowserKind::Chromium("chromium") }),
-        "chrome" | "google-chrome" =>
-            Some(Browser { bin: "google-chrome",  kind: BrowserKind::Chromium("google-chrome") }),
-        "brave" | "brave-browser" =>
-            Some(Browser { bin: "brave-browser",  kind: BrowserKind::Chromium("brave-browser") }),
-        "falkon" =>
-            Some(Browser { bin: "falkon",         kind: BrowserKind::Falkon }),
-        _ => None,
-    }
-}
+use crate::browser::{
+    chromium_cookie_paths, falkon_cookie_paths, firefox_cookie_paths, open_browser,
+    resolve_browser, sqlite3_query, Browser, BrowserKind,
+};
 
 fn run_login(rest: &[String]) {
     let browser: Option<Browser> = match rest.first() {
@@ -172,7 +149,7 @@ fn run_login(rest: &[String]) {
     println!("{}", tr("Click \"Continue with Google\" and complete the login."));
     println!("{}", tr("After you are redirected to your Patreon feed, press Enter here."));
 
-    open_browser(LOGIN_URL, browser.as_ref().map(|b| b.bin));
+    open_browser(LOGIN_URL, browser.as_ref());
 
     let _ = io::stdin().read_line(&mut String::new());
 
@@ -215,20 +192,6 @@ fn run_login(rest: &[String]) {
     println!("{}", tr("Session saved."));
 }
 
-fn open_browser(url: &str, bin: Option<&str>) {
-    let cmd = bin.unwrap_or("xdg-open");
-    let launched = std::process::Command::new(cmd)
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .is_ok();
-    if !launched {
-        println!("{}", trf("Could not launch '{}' automatically.", &[&cmd]));
-        println!("{}", trf("Please open this URL manually: {}", &[&url]));
-    }
-}
-
 // читает куки нужного браузера, если не указан — перебирает все подряд
 fn read_session(browser: Option<&Browser>) -> Option<String> {
     match browser {
@@ -246,19 +209,12 @@ fn read_session(browser: Option<&Browser>) -> Option<String> {
 }
 
 fn read_firefox_patreon_session() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let ff_dir = PathBuf::from(&home).join(".mozilla").join("firefox");
-
-    for entry in fs::read_dir(&ff_dir).ok()?.flatten() {
-        let db = entry.path().join("cookies.sqlite");
-        if !db.exists() {
-            continue;
-        }
-        let sql = "SELECT value FROM moz_cookies \
-                   WHERE (host = 'www.patreon.com' OR host = '.patreon.com') \
-                   AND name = 'session_id' \
-                   ORDER BY lastAccessed DESC LIMIT 1";
-        if let Some(v) = sqlite3_query(&db, sql) {
+    let sql = "SELECT value FROM moz_cookies \
+               WHERE (host = 'www.patreon.com' OR host = '.patreon.com') \
+               AND name = 'session_id' \
+               ORDER BY lastAccessed DESC LIMIT 1";
+    for db in firefox_cookie_paths() {
+        if let Some(v) = sqlite3_query(&db, sql, "booru_patreon_cookie") {
             return Some(v);
         }
     }
@@ -267,23 +223,13 @@ fn read_firefox_patreon_session() -> Option<String> {
 
 // Falkon хранит куки в том же формате что и Chromium
 fn read_falkon_patreon_session() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let profiles_dir = PathBuf::from(&home)
-        .join(".config")
-        .join("falkon")
-        .join("profiles");
-
-    for entry in fs::read_dir(&profiles_dir).ok()?.flatten() {
-        let db = entry.path().join("Cookies");
-        if !db.exists() {
-            continue;
-        }
-        let sql = "SELECT value FROM cookies \
-                   WHERE (host_key = 'www.patreon.com' OR host_key = '.patreon.com') \
-                   AND name = 'session_id' \
-                   AND length(value) > 0 \
-                   ORDER BY last_access_utc DESC LIMIT 1";
-        if let Some(v) = sqlite3_query(&db, sql) {
+    let sql = "SELECT value FROM cookies \
+               WHERE (host_key = 'www.patreon.com' OR host_key = '.patreon.com') \
+               AND name = 'session_id' \
+               AND length(value) > 0 \
+               ORDER BY last_access_utc DESC LIMIT 1";
+    for db in falkon_cookie_paths() {
+        if let Some(v) = sqlite3_query(&db, sql, "booru_patreon_cookie") {
             return Some(v);
         }
     }
@@ -291,56 +237,17 @@ fn read_falkon_patreon_session() -> Option<String> {
 }
 
 fn read_chromium_patreon_session(browser: &str) -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let db = PathBuf::from(&home)
-        .join(".config")
-        .join(browser)
-        .join("Default")
-        .join("Cookies");
-
-    if !db.exists() {
-        return None;
-    }
-
-    // зашифрованные куки (v10/v11) фильтруются через length > 0
     let sql = "SELECT value FROM cookies \
                WHERE (host_key = 'www.patreon.com' OR host_key = '.patreon.com') \
                AND name = 'session_id' \
                AND length(value) > 0 \
                ORDER BY last_access_utc DESC LIMIT 1";
-    sqlite3_query(&db, sql)
-}
-
-// копирует в tmp и запускает sqlite3 — Firefox блокирует живой файл
-fn sqlite3_query(db: &Path, sql: &str) -> Option<String> {
-    let tmp     = std::env::temp_dir().join("booru_patreon_cookie.sqlite");
-    let tmp_wal = std::env::temp_dir().join("booru_patreon_cookie.sqlite-wal");
-    let tmp_shm = std::env::temp_dir().join("booru_patreon_cookie.sqlite-shm");
-
-    fs::copy(db, &tmp).ok()?;
-
-    let wal = PathBuf::from(format!("{}-wal", db.display()));
-    let shm = PathBuf::from(format!("{}-shm", db.display()));
-    if wal.exists() { let _ = fs::copy(&wal, &tmp_wal); }
-    if shm.exists() { let _ = fs::copy(&shm, &tmp_shm); }
-
-    let out = std::process::Command::new("sqlite3")
-        .arg(&tmp)
-        .arg(sql)
-        .output()
-        .ok();
-
-    let _ = fs::remove_file(&tmp);
-    let _ = fs::remove_file(&tmp_wal);
-    let _ = fs::remove_file(&tmp_shm);
-
-    let out = out?;
-    if !out.status.success() {
-        return None;
+    for db in chromium_cookie_paths(browser) {
+        if let Some(v) = sqlite3_query(&db, sql, "booru_patreon_cookie") {
+            return Some(v);
+        }
     }
-    let v = String::from_utf8(out.stdout).ok()?;
-    let v = v.trim().to_string();
-    if v.is_empty() { None } else { Some(v) }
+    None
 }
 
 // показ

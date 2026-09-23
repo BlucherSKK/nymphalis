@@ -29,7 +29,7 @@ complete -c nymphalis -n '__fish_seen_subcommand_from gelbooru.com gel gelbu gel
 complete -c nymphalis -n '__fish_seen_subcommand_from gelbooru.com gel gelbu gelbooru' -a 'set'      -d 'Set credentials'
 
 # подкоманды desu.uno
-complete -c nymphalis -n '__fish_seen_subcommand_from desu.uno desu' -a 'download' -d 'Download manga chapters'
+complete -c nymphalis -n '__fish_seen_subcommand_from desu.uno desu' -a 'download' -d 'Download manga or ranobe chapters'
 complete -c nymphalis -n '__fish_seen_subcommand_from desu.uno desu' -a 'search'   -d 'Search manga'
 complete -c nymphalis -n '__fish_seen_subcommand_from desu.uno desu' -a 'login'    -d 'Save session from browser'
 
@@ -97,7 +97,7 @@ services=(
 )
 
 local -a gelbooru_cmds=('download:Download images by tags' 'search:Search tags' 'set:Set credentials')
-local -a desu_cmds=('download:Download manga chapters' 'search:Search manga' 'login:Save session from browser')
+local -a desu_cmds=('download:Download manga or ranobe chapters' 'search:Search manga' 'login:Save session from browser')
 local -a mangadex_cmds=('download:Download Russian chapters' 'search:Search manga')
 local -a patreon_cmds=('download:Download creator media' 'show:List active subscriptions' 'login:Save session from browser')
 local -a set_vars=('user_id' 'api_key' 'jobs' 'desu_session' 'desu_proxy' 'patreon_session' 'patreon_proxy')

@@ -1,3 +1,4 @@
+mod browser;
 mod cli;
 mod config;
 mod desu;
@@ -65,11 +66,11 @@ fn print_usage() {
     eprintln!("{}", tr("Commands (desu.uno):"));
     eprintln!(
         "{}",
-        tr("  nymphalis desu.uno download <slug.id> [slug.id2] ...")
+        tr("  nymphalis desu.uno download [manga|ranobe] <dir> <slug.id> [slug.id2] ...")
     );
     eprintln!(
         "{}",
-        tr("      Download all chapters of the given manga title(s).")
+        tr("      Download all chapters of the given title(s) into <dir> (default: manga).")
     );
     eprintln!("{}", tr("  nymphalis desu.uno search <keyword>"));
     eprintln!(
