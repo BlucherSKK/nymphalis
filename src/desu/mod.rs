@@ -1,6 +1,8 @@
 use crate::config::{load_config, save_config};
 use crate::gelbooru::download_file_simple;
 use crate::language::{tr, trf};
+use regex::Regex;
+use serde::Deserialize;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -373,11 +375,13 @@ fn status_error(status: reqwest::StatusCode) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn xhr_get(client: &reqwest::blocking::Client, url: &str) -> Result<String, String> {
     xhr_get_with_url(client, url).map(|(body, _)| body)
 }
 
 // то же что xhr_get, но ещё возвращает финальный URL
+#[allow(dead_code)]
 fn xhr_get_with_url(
     client: &reqwest::blocking::Client,
     url: &str,
@@ -453,7 +457,139 @@ fn parse_slug_id(input: &str) -> Option<(String, u64)> {
     None
 }
 
-// собирает ссылки на главы из HTML
+#[derive(Debug, Clone)]
+struct DesuChapter {
+    id: Option<u64>,
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChapterApiResponse {
+    chapter: Option<ChapterApiData>,
+    errors: Option<Vec<ApiErrorItem>>,
+    error: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChapterApiData {
+    pages: Option<Vec<ChapterApiPage>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChapterApiPage {
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiErrorItem {
+    message: Option<String>,
+}
+
+fn fetch_chapter_pages_api(
+    client: &reqwest::blocking::Client,
+    manga_id: u64,
+    chapter_id: u64,
+) -> Result<Vec<String>, String> {
+    let url = format!("{}/api/manga/{}/chapters/{}", BASE, manga_id, chapter_id);
+    let body = plain_get(client, &url)?;
+    let resp: ChapterApiResponse = serde_json::from_str(&body)
+        .map_err(|e| trf("Failed to parse chapter API JSON: {}", &[&e]))?;
+
+    if let Some(chapter) = resp.chapter {
+        if let Some(pages) = chapter.pages {
+            let urls: Vec<String> = pages.into_iter().map(|p| p.url).collect();
+            if !urls.is_empty() {
+                return Ok(urls);
+            }
+        }
+    }
+
+    if let Some(errors) = resp.errors {
+        for err in errors {
+            if let Some(msg) = err.message {
+                return Err(msg);
+            }
+        }
+    }
+
+    if let Some(errors) = resp.error {
+        if let Some(msg) = errors.into_iter().next() {
+            return Err(msg);
+        }
+    }
+
+    Err(tr("No pages found in chapter API response."))
+}
+
+fn parse_chapter_id_from_reader_html(html: &str) -> Option<u64> {
+    let re = Regex::new(r#""chapter"\s*:\s*\{[^}]*"id"\s*:\s*(\d+)"#).ok()?;
+    let cap = re.captures(html)?;
+    cap.get(1)?.as_str().parse().ok()
+}
+
+fn parse_manga_id_from_chlist(html: &str) -> Option<u64> {
+    let re = Regex::new(r#"data-manga_id=["'](\d+)["']"#).ok()?;
+    let cap = re.captures(html)?;
+    cap.get(1)?.as_str().parse().ok()
+}
+
+// собирает ссылки на главы и id (из кнопок скачивания chDownload)
+fn parse_chapters(html: &str, slug_id: &str) -> Vec<DesuChapter> {
+    let re_chlist = Regex::new(r#"(?s)<ul[^>]*\bclass=["'][^"']*chlist[^"']*["'][^>]*>(.*?)</ul>"#).ok();
+    let re_li = Regex::new(r"(?s)<li[^>]*>(.*?)</li>").ok();
+    let re_cid = Regex::new(r#"data-chapters_id=["'](\d+)["']"#).ok();
+    let re_href = Regex::new(r#"href=["']([^"']+)["']"#).ok();
+
+    let mut chapters = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
+
+    let search_scope = if let Some(ref r_chlist) = re_chlist {
+        if let Some(cap) = r_chlist.captures(html) {
+            cap.get(1).map(|m| m.as_str()).unwrap_or(html)
+        } else {
+            html
+        }
+    } else {
+        html
+    };
+
+    if let (Some(r_li), Some(r_cid), Some(r_href)) = (re_li, re_cid, re_href) {
+        for cap in r_li.captures_iter(search_scope) {
+            let li_text = &cap[1];
+            let cid = r_cid
+                .captures(li_text)
+                .and_then(|c| c.get(1))
+                .and_then(|m| m.as_str().parse::<u64>().ok());
+
+            if let Some(href_cap) = r_href.captures(li_text).and_then(|c| c.get(1)) {
+                let href = href_cap.as_str().trim_end_matches('/');
+                if href.contains("/vol") || href.contains("/ch") || href.ends_with("/rus") {
+                    let rel = href
+                        .find("/manga/")
+                        .map(|i| &href[i + 1..])
+                        .unwrap_or(href)
+                        .trim_start_matches('/')
+                        .to_string();
+
+                    if seen_paths.insert(rel.clone()) {
+                        chapters.push(DesuChapter { id: cid, path: rel });
+                    }
+                }
+            }
+        }
+    }
+
+    if chapters.is_empty() {
+        for url in parse_chapter_urls(html, slug_id) {
+            chapters.push(DesuChapter { id: None, path: url });
+        }
+    }
+
+    chapters.sort_by(|a, b| chapter_sort_key(&a.path).cmp(&chapter_sort_key(&b.path)));
+    chapters
+}
+
+// собирает ссылки на главы из HTML (fallback)
 fn parse_chapter_urls(html: &str, slug_id: &str) -> Vec<String> {
     let needle     = format!("/manga/{}/vol", slug_id.trim_end_matches('/'));
     let needle_rel = format!("manga/{}/vol",  slug_id.trim_end_matches('/'));
@@ -676,27 +812,69 @@ fn run_search(rest: &[String]) {
 
 fn parse_search_results(html: &str) -> Vec<(String, String, String)> {
     let mut results = Vec::new();
-    let manga_section = html
-        .find(">Манга<")
-        .map(|p| {
-            let rest = &html[p..];
-            rest.find(">Аниме<").map(|e| &rest[..e]).unwrap_or(rest)
-        })
-        .unwrap_or(html);
 
-    let mut pos = 0;
-    while let Some(li_start) = manga_section[pos..].find("<li>") {
-        let li_start = pos + li_start;
-        let li_end = manga_section[li_start..].find("</li>").map(|e| li_start + e + 5);
-        let block = &manga_section[li_start..li_end.unwrap_or(manga_section.len())];
-        pos = li_end.unwrap_or(manga_section.len());
+    let re_li = Regex::new(r"(?s)<li[^>]*>(.*?)</li>").ok();
+    let re_href = Regex::new(r#"href=["'](?:/)?manga/([^"']+)["']"#).ok();
+    let re_title_new = Regex::new(r#"(?s)class=["'][^"']*AniMangaSearchCard__title[^"']*["'][^>]*>(.*?)</span>"#).ok();
+    let re_sub_new = Regex::new(r#"(?s)class=["'][^"']*AniMangaSearchCard__subtitle[^"']*["'][^>]*>(.*?)</span>"#).ok();
 
-        let slug_id = extract_manga_href(block);
-        let en_title = extract_div_class(block, "itemTitle");
-        let ru_title = extract_div_class(block, "itemSubTitle");
+    if let (Some(r_li), Some(r_href)) = (re_li, re_href) {
+        for cap in r_li.captures_iter(html) {
+            let block = &cap[1];
+            let slug_id = if let Some(h) = r_href.captures(block).and_then(|c| c.get(1)) {
+                h.as_str().trim_end_matches('/').to_string()
+            } else {
+                continue;
+            };
 
-        if let Some(slug_id) = slug_id {
-            results.push((slug_id, en_title, ru_title));
+            let mut ru_title = String::new();
+            let mut en_title = String::new();
+
+            if let Some(ref r_t) = re_title_new {
+                if let Some(t) = r_t.captures(block).and_then(|c| c.get(1)) {
+                    ru_title = strip_tags(t.as_str());
+                }
+            }
+            if let Some(ref r_s) = re_sub_new {
+                if let Some(t) = r_s.captures(block).and_then(|c| c.get(1)) {
+                    en_title = strip_tags(t.as_str());
+                }
+            }
+
+            if ru_title.is_empty() && en_title.is_empty() {
+                en_title = extract_div_class(block, "itemTitle");
+                ru_title = extract_div_class(block, "itemSubTitle");
+            }
+
+            if !slug_id.is_empty() {
+                results.push((slug_id, en_title, ru_title));
+            }
+        }
+    }
+
+    if results.is_empty() {
+        let manga_section = html
+            .find(">Манга<")
+            .map(|p| {
+                let rest = &html[p..];
+                rest.find(">Аниме<").map(|e| &rest[..e]).unwrap_or(rest)
+            })
+            .unwrap_or(html);
+
+        let mut pos = 0;
+        while let Some(li_start) = manga_section[pos..].find("<li>") {
+            let li_start = pos + li_start;
+            let li_end = manga_section[li_start..].find("</li>").map(|e| li_start + e + 5);
+            let block = &manga_section[li_start..li_end.unwrap_or(manga_section.len())];
+            pos = li_end.unwrap_or(manga_section.len());
+
+            let slug_id = extract_manga_href(block);
+            let en_title = extract_div_class(block, "itemTitle");
+            let ru_title = extract_div_class(block, "itemSubTitle");
+
+            if let Some(slug_id) = slug_id {
+                results.push((slug_id, en_title, ru_title));
+            }
         }
     }
 
@@ -789,7 +967,8 @@ fn download_manga(client: &reqwest::blocking::Client, base_dir: &str, input: &st
     let id_str = id.to_string();
     let actual_slug_id = slug_from_url(&final_url, &id_str).unwrap_or_else(|| slug_id.clone());
 
-    let chapters = parse_chapter_urls(&html, &actual_slug_id);
+    let effective_manga_id = parse_manga_id_from_chlist(&html).unwrap_or(id);
+    let chapters = parse_chapters(&html, &actual_slug_id);
 
     if chapters.is_empty() {
         println!("{}", trf("No chapters found for '{}'.", &[&manga_name]));
@@ -836,10 +1015,10 @@ fn download_manga(client: &reqwest::blocking::Client, base_dir: &str, input: &st
     let total = chapters.len();
     let mut downloaded = 0usize;
 
-    for (idx, chapter_path) in chapters.iter().enumerate() {
+    for (idx, chapter) in chapters.iter().enumerate() {
         display.set_msg(trf("Chapter {}/{}", &[&(idx + 1), &total]));
 
-        let chapter_name = chapter_dir_name(chapter_path);
+        let chapter_name = chapter_dir_name(&chapter.path);
         let chapter_dir = root_dir.join(&chapter_name);
 
         if let Err(e) = fs::create_dir_all(&chapter_dir) {
@@ -851,29 +1030,52 @@ fn download_manga(client: &reqwest::blocking::Client, base_dir: &str, input: &st
             continue;
         }
 
-        let chapter_url = format!("{}/{}", BASE, chapter_path);
-        let chapter_html = match plain_get(client, &chapter_url) {
-            Ok(h) => h,
-            Err(e) => {
-                display.println(trf(
-                    "Failed to fetch pages for chapter {}: {}",
-                    &[&chapter_name, &e],
-                ));
-                display.advance();
-                continue;
-            }
-        };
+        let mut page_urls: Vec<String> = Vec::new();
 
-        let (dir, filenames) = match parse_reader_init(&chapter_html) {
-            Some(v) => v,
-            None => {
-                display.println(trf("No pages in chapter {}.", &[&chapter_name]));
-                display.advance();
-                continue;
+        // 1. Попытка через API (по кнопке chDownload / data-chapters_id)
+        if let Some(cid) = chapter.id {
+            match fetch_chapter_pages_api(client, effective_manga_id, cid) {
+                Ok(urls) => page_urls = urls,
+                Err(e) => {
+                    display.println(trf(
+                        "Chapter {} API error: {}",
+                        &[&chapter_name, &e],
+                    ));
+                }
             }
-        };
+        }
 
-        if filenames.is_empty() {
+        // 2. Fallback: если страниц нет, открываем страницу читалки
+        if page_urls.is_empty() {
+            let chapter_url = format!("{}/{}", BASE, chapter.path);
+            match plain_get(client, &chapter_url) {
+                Ok(chapter_html) => {
+                    // Пробуем извлечь id главы из window.MangaReader
+                    if let Some(cid) = parse_chapter_id_from_reader_html(&chapter_html) {
+                        if let Ok(urls) = fetch_chapter_pages_api(client, effective_manga_id, cid) {
+                            page_urls = urls;
+                        }
+                    }
+                    // Если всё ещё нет, проверяем старый Reader.init
+                    if page_urls.is_empty() {
+                        if let Some((dir, filenames)) = parse_reader_init(&chapter_html) {
+                            page_urls = filenames
+                                .into_iter()
+                                .map(|f| format!("{}{}", dir, f))
+                                .collect();
+                        }
+                    }
+                }
+                Err(e) => {
+                    display.println(trf(
+                        "Failed to fetch pages for chapter {}: {}",
+                        &[&chapter_name, &e],
+                    ));
+                }
+            }
+        }
+
+        if page_urls.is_empty() {
             display.println(trf("No pages in chapter {}.", &[&chapter_name]));
             display.advance();
             continue;
@@ -881,20 +1083,25 @@ fn download_manga(client: &reqwest::blocking::Client, base_dir: &str, input: &st
 
         let handle = display.begin(crate::cli::ContentUnit::pages(
             &chapter_name,
-            filenames.len() as u64,
+            page_urls.len() as u64,
         ));
 
         let mut chapter_ok = true;
-        for (pg, filename) in filenames.iter().enumerate() {
-            let ext = filename
+        for (pg, img_url) in page_urls.iter().enumerate() {
+            let clean_url = img_url.split('?').next().unwrap_or(img_url);
+            let ext = clean_url
                 .rsplit('.')
                 .next()
                 .filter(|e| e.len() <= 5 && !e.contains('/'))
                 .unwrap_or("jpg");
             let dest = chapter_dir.join(format!("{:04}.{}", pg + 1, ext));
 
-            let img_url = format!("{}{}", dir, filename);
-            if let Err(e) = download_file_simple(client, &img_url, &dest, REFERER) {
+            if dest.exists() && dest.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+                handle.inc(1);
+                continue;
+            }
+
+            if let Err(e) = download_file_simple(client, img_url, &dest, REFERER) {
                 display.println(format!("  {} p{:04}: {}", chapter_name, pg + 1, e));
                 chapter_ok = false;
             }
@@ -902,7 +1109,7 @@ fn download_manga(client: &reqwest::blocking::Client, base_dir: &str, input: &st
         }
 
         if chapter_ok {
-            display.end_ok(handle, filenames.len() as u64);
+            display.end_ok(handle, page_urls.len() as u64);
             downloaded += 1;
         } else {
             display.end_err(handle, "some pages failed");
