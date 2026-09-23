@@ -41,6 +41,10 @@ jobs:
             target: aarch64-apple-darwin
             artifact: nymphalis-macos-arm64
             bin: nymphalis
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: nymphalis-macos-amd64
+            bin: nymphalis
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: nymphalis-windows-amd64.exe
@@ -96,6 +100,7 @@ jobs:
           mv dist/nymphalis-linux-amd64/nymphalis           out/nymphalis-linux-amd64
           mv dist/nymphalis-linux-amd64-musl/nymphalis      out/nymphalis-linux-amd64-musl
           mv dist/nymphalis-macos-arm64/nymphalis           out/nymphalis-macos-arm64
+          mv dist/nymphalis-macos-amd64/nymphalis           out/nymphalis-macos-amd64
           mv dist/nymphalis-windows-amd64.exe/nymphalis.exe out/nymphalis-windows-amd64.exe
 
       - name: Read release notes
@@ -117,4 +122,5 @@ jobs:
             out/nymphalis-linux-amd64
             out/nymphalis-linux-amd64-musl
             out/nymphalis-macos-arm64
+            out/nymphalis-macos-amd64
             out/nymphalis-windows-amd64.exe

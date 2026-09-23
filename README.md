@@ -22,7 +22,7 @@ chmod +x nymphalis-linux-amd64
 sudo mv nymphalis-linux-amd64 /usr/local/bin/nymphalis
 ```
 
-Available builds: `linux-amd64` (glibc), `linux-amd64-musl` (static), `macos-arm64`, `windows-amd64`.
+Available builds: `linux-amd64` (glibc), `linux-amd64-musl` (static), `macos-arm64`, `macos-amd64`, `windows-amd64`.
 
 ### Windows (PowerShell)
 
@@ -161,7 +161,7 @@ chmod +x nymphalis-linux-amd64
 sudo mv nymphalis-linux-amd64 /usr/local/bin/nymphalis
 ```
 
-Доступные сборки: `linux-amd64` (glibc), `linux-amd64-musl` (статическая), `macos-arm64`, `windows-amd64`.
+Доступные сборки: `linux-amd64` (glibc), `linux-amd64-musl` (статическая), `macos-arm64`, `macos-amd64`, `windows-amd64`.
 
 ### Windows (PowerShell)
 

@@ -1,9 +1,8 @@
-# add kodik downloader module 
+# add compile for macos_x86-64
 
 ## Изменения
 
-- добавлена возможность грузить видео с kodik
-- через опцию -tpp или --try-parse-page (стабильно работает пока только для shizaproject.com)
+- добавлена версия под macos с интелами
 
 
 ## Установка
