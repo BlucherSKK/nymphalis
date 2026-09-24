@@ -2,6 +2,7 @@ use crate::http::build_client;
 use crate::language::{tr, trf};
 use serde::Deserialize;
 use std::cmp::Ordering;
+use std::io::{self, Write};
 use std::process::exit;
 
 pub const VERSION: &str = env!("NYMPHALIS_VERSION");
@@ -126,49 +127,167 @@ pub fn run_update(args: &[String]) {
                 )
             );
 
-            if let Some(name) = &release.name {
-                let name = name.trim();
-                if !name.is_empty() && name != latest_tag {
-                    println!("{}: {}", tr("Release"), name);
-                }
-            }
-
             let asset = find_platform_asset(&release.assets, PLATFORM);
-            if let Some(asset) = asset {
-                println!();
-                println!(
-                    "{}",
-                    trf(
-                        "Direct download link for your platform ({}):\n  {}",
-                        &[&PLATFORM, &asset.browser_download_url]
-                    )
-                );
-            }
-
-            println!();
-            println!("{}: {}", tr("Release page"), release.html_url);
-
-            if let Some(body) = &release.body {
-                let trimmed = body.trim();
-                if !trimmed.is_empty() {
-                    println!();
-                    println!("{}:\n{}", tr("Changelog"), trimmed);
-                }
-            }
+            let Some(asset) = asset else {
+                eprintln!("{}", trf("No compatible asset found for platform {}", &[&PLATFORM]));
+                return;
+            };
 
             if args.iter().any(|a| a == "--download" || a == "-d") {
-                if let Some(asset) = asset {
-                    download_asset(&client, asset);
+                download_asset(&client, asset);
+                return;
+            }
+
+            if args.iter().any(|a| a == "--check" || a == "-c") {
+                return;
+            }
+
+            let auto_yes = args.iter().any(|a| a == "-y" || a == "--yes");
+            let should_update = if auto_yes {
+                true
+            } else {
+                print!(
+                    "{}",
+                    trf("Update automatically to {}? [y/N]: ", &[&latest_tag])
+                );
+                let _ = io::stdout().flush();
+
+                let mut input = String::new();
+                if io::stdin().read_line(&mut input).is_err() {
+                    false
                 } else {
-                    eprintln!("{}", trf("No compatible asset found for platform {}", &[&PLATFORM]));
+                    is_confirmed(&input)
                 }
+            };
+
+            if should_update {
+                self_update(&client, asset, latest_tag);
+            } else {
+                println!("{}", tr("Cancelled."));
             }
         }
     }
 }
 
+pub fn is_confirmed(input: &str) -> bool {
+    let trimmed = input.trim().to_lowercase();
+    trimmed.starts_with('y') || trimmed.starts_with('д') || trimmed.starts_with('j')
+}
+
+fn self_update(client: &reqwest::blocking::Client, asset: &ReleaseAsset, target_version: &str) {
+    let current_exe = match std::env::current_exe() {
+        Ok(path) => match std::fs::canonicalize(&path) {
+            Ok(canonical) => canonical,
+            Err(_) => path,
+        },
+        Err(e) => {
+            eprintln!(
+                "{}",
+                trf("Failed to determine current executable path: {}", &[&e])
+            );
+            exit(1);
+        }
+    };
+
+    let parent_dir = current_exe.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let temp_file_path = parent_dir.join(format!(".nymphalis-update-{}.tmp", std::process::id()));
+
+    println!("{}", trf("Downloading {}...", &[&asset.name]));
+
+    let mut response = match client.get(&asset.browser_download_url).send() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{}", trf("Failed to download asset: {}", &[&e]));
+            exit(1);
+        }
+    };
+
+    if !response.status().is_success() {
+        eprintln!("{}", trf("Failed to download asset: HTTP {}", &[&response.status()]));
+        exit(1);
+    }
+
+    let mut file = match std::fs::File::create(&temp_file_path) {
+        Ok(f) => f,
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                eprintln!(
+                    "{}",
+                    tr("Permission denied. Try running with sudo: sudo nymphalis update")
+                );
+            } else {
+                eprintln!("{}", trf("Failed to create temporary file: {}", &[&e]));
+            }
+            exit(1);
+        }
+    };
+
+    if let Err(e) = std::io::copy(&mut response, &mut file) {
+        let _ = std::fs::remove_file(&temp_file_path);
+        eprintln!("{}", trf("Failed to write update: {}", &[&e]));
+        exit(1);
+    }
+
+    drop(file);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(&temp_file_path) {
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o755);
+            if let Err(e) = std::fs::set_permissions(&temp_file_path, perms) {
+                let _ = std::fs::remove_file(&temp_file_path);
+                eprintln!("{}", trf("Failed to set executable permissions: {}", &[&e]));
+                exit(1);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let old_exe_path = parent_dir.join(format!(".nymphalis-old-{}.tmp", std::process::id()));
+        let _ = std::fs::remove_file(&old_exe_path);
+
+        if let Err(e) = std::fs::rename(&current_exe, &old_exe_path) {
+            let _ = std::fs::remove_file(&temp_file_path);
+            eprintln!("{}", trf("Failed to replace executable: {}", &[&e]));
+            exit(1);
+        }
+
+        if let Err(e) = std::fs::rename(&temp_file_path, &current_exe) {
+            let _ = std::fs::rename(&old_exe_path, &current_exe);
+            let _ = std::fs::remove_file(&temp_file_path);
+            eprintln!("{}", trf("Failed to replace executable: {}", &[&e]));
+            exit(1);
+        }
+
+        let _ = std::fs::remove_file(&old_exe_path);
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Err(e) = std::fs::rename(&temp_file_path, &current_exe) {
+            let _ = std::fs::remove_file(&temp_file_path);
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                eprintln!(
+                    "{}",
+                    tr("Permission denied. Try running with sudo: sudo nymphalis update")
+                );
+            } else {
+                eprintln!("{}", trf("Failed to replace executable: {}", &[&e]));
+            }
+            exit(1);
+        }
+    }
+
+    println!(
+        "{}",
+        trf("Successfully updated nymphalis to {}!", &[&target_version])
+    );
+}
+
 fn download_asset(client: &reqwest::blocking::Client, asset: &ReleaseAsset) {
-    println!();
     println!("{}", trf("Downloading {}...", &[&asset.name]));
 
     let mut response = match client.get(&asset.browser_download_url).send() {
@@ -254,6 +373,64 @@ mod tests {
 
         let non_existent = find_platform_asset(&assets, "freebsd-amd64");
         assert!(non_existent.is_none());
+    }
+
+    #[test]
+    fn test_is_confirmed() {
+        assert!(is_confirmed("y"));
+        assert!(is_confirmed("Y"));
+        assert!(is_confirmed("yes"));
+        assert!(is_confirmed("YES"));
+        assert!(is_confirmed("д"));
+        assert!(is_confirmed("Да"));
+        assert!(is_confirmed("да"));
+        assert!(is_confirmed("ja"));
+        assert!(is_confirmed("Ja"));
+
+        assert!(!is_confirmed("n"));
+        assert!(!is_confirmed("no"));
+        assert!(!is_confirmed("нет"));
+        assert!(!is_confirmed(""));
+        assert!(!is_confirmed("   "));
+        assert!(!is_confirmed("other"));
+    }
+
+    #[test]
+    fn test_replace_binary_logic() {
+        let temp_dir = std::env::temp_dir().join(format!("nymphalis_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let target_exe = temp_dir.join("nymphalis");
+        std::fs::write(&target_exe, "old binary").unwrap();
+
+        let temp_update = temp_dir.join(".nymphalis-update-test.tmp");
+        std::fs::write(&temp_update, "new binary").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&temp_update).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&temp_update, perms).unwrap();
+        }
+
+        #[cfg(not(windows))]
+        {
+            std::fs::rename(&temp_update, &target_exe).unwrap();
+        }
+
+        #[cfg(windows)]
+        {
+            let old_exe = temp_dir.join(".nymphalis-old-test.tmp");
+            std::fs::rename(&target_exe, &old_exe).unwrap();
+            std::fs::rename(&temp_update, &target_exe).unwrap();
+            let _ = std::fs::remove_file(&old_exe);
+        }
+
+        let content = std::fs::read_to_string(&target_exe).unwrap();
+        assert_eq!(content, "new binary");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
 
