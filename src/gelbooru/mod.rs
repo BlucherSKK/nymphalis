@@ -186,7 +186,7 @@ fn discover_posts(
     client: &reqwest::blocking::Client,
     creds: &Option<Credentials>,
     tags_query: &str,
-    out_dir: &str,
+    _out_dir: &str,
 ) -> Option<(Vec<(String, String)>, u64)> {
     let mut to_download: Vec<(String, String)> = Vec::new();
     let already_have: u64 = 0;

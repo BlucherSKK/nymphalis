@@ -4,7 +4,7 @@ use std::process::exit;
 
 const FISH: &str = "\
 # nymphalis completions — auto-generated, do not edit
-set -l services gelbooru.com desu.uno mangadex.org patreon.com gel gelbu gelbooru desu md mdex mangadex patreon set add-shell-completions
+set -l services gelbooru.com desu.uno mangadex.org patreon.com gel gelbu gelbooru desu md mdex mangadex patreon set add-shell-completions version update
 
 # не предлагать файлы по умолчанию
 complete -c nymphalis -f
@@ -15,6 +15,8 @@ complete -c nymphalis -n 'not __fish_seen_subcommand_from $services' -a 'desu.un
 complete -c nymphalis -n 'not __fish_seen_subcommand_from $services' -a 'mangadex.org' -d 'Download manga from mangadex'
 complete -c nymphalis -n 'not __fish_seen_subcommand_from $services' -a 'patreon.com'  -d 'Download media from Patreon'
 complete -c nymphalis -n 'not __fish_seen_subcommand_from $services' -a 'set'          -d 'Save a config variable'
+complete -c nymphalis -n 'not __fish_seen_subcommand_from $services' -a 'version'      -d 'Show version and platform'
+complete -c nymphalis -n 'not __fish_seen_subcommand_from $services' -a 'update'       -d 'Check for updates from GitHub'
 complete -c nymphalis -n 'not __fish_seen_subcommand_from $services' -a 'add-shell-completions' -d 'Install shell completions'
 
 # псевдонимы
@@ -54,7 +56,7 @@ _nymphalis() {
     prev=\"${COMP_WORDS[COMP_CWORD-1]}\"
     words=(\"${COMP_WORDS[@]}\")
 
-    local services=\"gelbooru.com desu.uno mangadex.org patreon.com gel gelbu gelbooru desu md mdex mangadex patreon set add-shell-completions\"
+    local services=\"gelbooru.com desu.uno mangadex.org patreon.com gel gelbu gelbooru desu md mdex mangadex patreon set add-shell-completions version update\"
 
     if [[ ${COMP_CWORD} -eq 1 ]]; then
         COMPREPLY=($(compgen -W \"$services\" -- \"$cur\"))
@@ -93,6 +95,8 @@ services=(
   'md:mangadex.org alias' 'mdex:mangadex.org alias' 'mangadex:mangadex.org alias'
   'patreon:patreon.com alias'
   'set:Save a config variable'
+  'version:Show version and platform'
+  'update:Check for updates from GitHub'
   'add-shell-completions:Install shell completions'
 )
 

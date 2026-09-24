@@ -18,8 +18,9 @@ pub fn unique_dest(path: &Path) -> PathBuf {
 }
 
 pub fn build_client() -> reqwest::blocking::Client {
+    let ua = format!("nymphalis/{} (+https://github.com/BlucherSKK/nymphalis)", crate::update::VERSION);
     match reqwest::blocking::Client::builder()
-        .user_agent("nymphalis/0.4 (+https://github.com/)")
+        .user_agent(ua)
         .build()
     {
         Ok(c) => c,

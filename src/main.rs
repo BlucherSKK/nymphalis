@@ -9,6 +9,7 @@ mod mangadex;
 mod patreon;
 mod shell;
 mod kodik;
+mod update;
 
 use language::{tr, trf};
 use std::env;
@@ -87,6 +88,10 @@ fn print_usage() {
             &[&config::config_path().display()]
         )
     );
+    eprintln!("{}", tr("  nymphalis version"));
+    eprintln!("{}", tr("      Show version and platform."));
+    eprintln!("{}", tr("  nymphalis update"));
+    eprintln!("{}", tr("      Check for the latest version on GitHub."));
     eprintln!();
     eprintln!("{}", tr("Examples:"));
     eprintln!("{}", tr("  nymphalis set user_id 1955543"));
@@ -128,6 +133,14 @@ fn main() {
 
     // Global commands that don't require a service selector
     match args[1].as_str() {
+        "version" | "--version" | "-v" => {
+            update::print_version();
+            return;
+        }
+        "update" => {
+            update::run_update(&args[2..]);
+            return;
+        }
         "set" => {
             config::run_set(&args[2..]);
             return;
